@@ -17,7 +17,7 @@ def jc_directoryinsights(event, context):
         jcapikeyarn = os.environ['JcApiKeyArn']
         incrementType = os.environ['incrementType']
         incrementAmount = int(os.environ['incrementAmount'])
-        bucketName = os.environ['BucketName']
+        cwLogGroupName = os.environ['LogGroupName']
         service = os.environ['service']
         orgId = os.environ['OrgId']
     except KeyError as e:
@@ -38,7 +38,7 @@ def jc_directoryinsights(event, context):
     start_date = start_dt.isoformat("T") + "Z"
     end_date = now.isoformat("T") + "Z"
 
-    outfileName = "jc_directoryinsights_" + start_date + "_" + end_date + ".json.gz"
+    outfileName = "jc_directoryinsights_" + start_date + "_" + end_date + ".json"
     availableServices = ['directory','radius','sso','systems','ldap','mdm','all']
     serviceList = ((service.replace(" ", "")).lower()).split(",")
     for service in serviceList:
@@ -84,7 +84,7 @@ def jc_directoryinsights(event, context):
                         'Dimensions': [
                             {
                                 'Name': 'JumpCloud',
-                                'Value': 'DirectoryInsightsServerlessApp'
+                                'Value': 'XanaduJCDirectoryInsightsServerlessApp'
                             },
                             {
                                 'Name': 'Version',
@@ -95,8 +95,9 @@ def jc_directoryinsights(event, context):
                         'Value': 1
                     },
                 ],
-                Namespace = 'JumpCloudDirectoryInsights'
+                Namespace = 'XanaduJCDirectoryInsights'
             )
+            cloudwatch.close()
             continue
         data = responseBody
             
@@ -113,15 +114,28 @@ def jc_directoryinsights(event, context):
         
     if len(finalData) == 0:
         return
-    finalData.sort(key = lambda x:x['timestamp'], reverse=True)
+    finalData.sort(key = lambda x:x['timestamp'], reverse=False)
     try:
-        gzOutfile = gzip.GzipFile(filename="/tmp/" + outfileName, mode="w", compresslevel=9)
-        gzOutfile.write(json.dumps(finalData, indent=2).encode("UTF-8"))
-        gzOutfile.close()
+        jsonFile = open('/tmp/' + outfileName, 'w')
+        jsonFile.write(('[' + ',\n'.join(json.dumps(i) for i in data) + ']'))
+        jsonFile.close
     except Exception as e:
         raise Exception(e)
     try:
-        s3 = boto3.client('s3')
-        s3.upload_file("/tmp/" + outfileName, bucketName, outfileName)
-    except ClientError as e:
+        logStreamName=str(datetime.datetime.now().strftime('%s') + '-directoryInsightLogs'),
+        cloudwatchLogs=boto3.client('logs')
+        cloudwatchLogs.create_log_stream(logGroupName=cwLogGroupName, logStreamName=logStreamName)
+        cloudwatchLogs.put_log_events(
+            logGroupName=cwLogGroupName,
+            logStreamName=logStreamName,
+            logEvents=[
+                {
+                    'timestamp': int(datetime.datetime.strptime(i['timestamp'],'%Y-%m-%dT%H:%M:%S.%fZ').strftime('%s')),
+                    'message': json.dumps(i)
+                }
+                for i in finalData
+            ]
+        )
+        cloudwatchLogs.close()
+    except Exception as e:
         raise Exception(e)
